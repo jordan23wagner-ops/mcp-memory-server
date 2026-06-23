@@ -4,26 +4,25 @@ Run directly:
     python -m memory_server.main
 
 MCP tools exposed:
-    store_memory    - persist text + metadata with vector embeddings
+    store_memory - persist text + metadata with vector embeddings
     retrieve_memory - semantic search over stored memories
 
 The MCP endpoint is mounted at /mcp (streamable HTTP transport).
 A /health endpoint is available for liveness checks.
 """
-
 import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
-from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
 
+from mcp.server.fastmcp import FastMCP
 from memory_server.store import MemoryStore
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -33,15 +32,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Shared state
 # ---------------------------------------------------------------------------
-
 store = MemoryStore()
 mcp = FastMCP("Memory Server")
+
 
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
-
-
 @mcp.tool()
 def store_memory(
     text: str,
@@ -81,10 +78,33 @@ def retrieve_memory(query: str, top_k: int = 5) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Temporary REST endpoints for easy testing (can be removed later)
+# ---------------------------------------------------------------------------
+class StoreRequest(BaseModel):
+    text: str
+    metadata: dict = {}
+
+
+class RetrieveRequest(BaseModel):
+    query: str
+    limit: int = 5
+
+
+@app.post("/store")
+async def store_memory_rest(request: StoreRequest):
+    memory_id = store.store(request.text, request.metadata)
+    return {"id": memory_id, "status": "stored"}
+
+
+@app.post("/retrieve")
+async def retrieve_memory_rest(request: RetrieveRequest):
+    results = store.retrieve(request.query, top_k=request.limit)
+    return {"results": results}
+
+
+# ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start/stop the Weaviate connection alongside the FastAPI server."""
@@ -113,6 +133,5 @@ async def health():
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     uvicorn.run("memory_server.main:app", host="0.0.0.0", port=8000, reload=True)
