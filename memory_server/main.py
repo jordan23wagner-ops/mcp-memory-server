@@ -8,7 +8,6 @@ MCP tools exposed:
     retrieve_memory - semantic search over stored memories
 
 The MCP endpoint is mounted at /mcp (streamable HTTP transport).
-A /health endpoint is available for liveness checks.
 """
 import logging
 from contextlib import asynccontextmanager
@@ -46,17 +45,7 @@ def store_memory(
     category: str = "",
     tags: list[str] | None = None,
 ) -> dict:
-    """Store a piece of text as a searchable memory with semantic embedding.
-
-    Args:
-        text: The memory content to store.
-        source: Where this memory came from (e.g. "conversation", "document").
-        category: A label for organising memories (e.g. "project-x", "personal").
-        tags: Optional list of tags for finer-grained filtering.
-
-    Returns:
-        A dict with the new memory's UUID and confirmation status.
-    """
+    """Store a piece of text as a searchable memory with semantic embedding."""
     metadata = {"source": source, "category": category, "tags": tags or []}
     memory_id = store.store(text, metadata)
     return {"id": memory_id, "status": "stored"}
@@ -64,21 +53,38 @@ def store_memory(
 
 @mcp.tool()
 def retrieve_memory(query: str, top_k: int = 5) -> list[dict]:
-    """Retrieve memories most relevant to a query using semantic search.
-
-    Args:
-        query: Natural-language search text.
-        top_k: Maximum number of results to return (default 5).
-
-    Returns:
-        A list of matching memories with text, metadata, and similarity distance.
-        Lower distance = higher relevance.
-    """
+    """Retrieve memories most relevant to a query using semantic search."""
     return store.retrieve(query, top_k=top_k)
 
 
 # ---------------------------------------------------------------------------
-# Temporary REST endpoints for easy testing (can be removed later)
+# FastAPI application
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store.connect()
+    yield
+    store.close()
+
+
+app = FastAPI(
+    title="Memory MCP Server",
+    description="Semantic memory storage and retrieval via MCP tools",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# Mount the MCP protocol handler
+app.mount("/mcp", mcp.streamable_http_app())
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "memory-mcp-server"}
+
+
+# ---------------------------------------------------------------------------
+# Temporary REST endpoints for testing (defined AFTER app is created)
 # ---------------------------------------------------------------------------
 class StoreRequest(BaseModel):
     text: str
@@ -100,34 +106,6 @@ async def store_memory_rest(request: StoreRequest):
 async def retrieve_memory_rest(request: RetrieveRequest):
     results = store.retrieve(request.query, top_k=request.limit)
     return {"results": results}
-
-
-# ---------------------------------------------------------------------------
-# FastAPI application
-# ---------------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Start/stop the Weaviate connection alongside the FastAPI server."""
-    store.connect()
-    yield
-    store.close()
-
-
-app = FastAPI(
-    title="Memory MCP Server",
-    description="Semantic memory storage and retrieval via MCP tools",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-# Mount the MCP protocol handler under /mcp
-app.mount("/mcp", mcp.streamable_http_app())
-
-
-@app.get("/health")
-async def health():
-    """Liveness probe."""
-    return {"status": "ok", "service": "memory-mcp-server"}
 
 
 # ---------------------------------------------------------------------------
