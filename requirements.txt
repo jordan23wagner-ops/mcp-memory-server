@@ -1,0 +1,5 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+mcp>=1.0.0
+weaviate-client>=4.9.0
+sentence-transformers>=3.3.0
