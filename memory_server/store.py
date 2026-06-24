@@ -62,26 +62,39 @@ class MemoryStore:
             logger.info(f"Collection '{collection_name}' already exists")
 
     def summarize(self, text: str) -> str:
+        prompt = f"Summarize the following text in 2-3 sentences. Focus on the key points.\n\nText:\n{text}\n\nSummary:"
+
+        # 1) Try Groq (free tier)
+        try:
+            from groq import Groq
+            groq_client = Groq()
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            logger.info("Summarization via groq")
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning(f"Groq summarization failed: {e}")
+
+        # 2) Fall back to Anthropic (paid, deployer's own key)
         try:
             import anthropic
             client = anthropic.Anthropic()
-
-            prompt = f"""Summarize the following text in 2-3 sentences. Focus on the key points.
-
-Text:
-{text}
-
-Summary:"""
-
             message = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-sonnet-4-6",
                 max_tokens=300,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
+            logger.info("Summarization via anthropic (fallback)")
             return message.content[0].text.strip()
         except Exception as e:
-            logger.warning(f"Summarization failed: {e}")
-            return text[:600]
+            logger.warning(f"Anthropic summarization failed: {e}")
+
+        # 3) Last resort: truncation
+        logger.warning("Summarization via truncation (all providers failed)")
+        return text[:600]
 
     def store(self, text: str, metadata: dict = None) -> str:
         if metadata is None:
