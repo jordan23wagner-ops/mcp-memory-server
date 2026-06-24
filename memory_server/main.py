@@ -1,4 +1,10 @@
-"""FastAPI + MCP server for semantic memory storage and retrieval."""
+"""FastAPI + MCP server for semantic memory storage and retrieval.
+
+Features:
+- MCP tools for agents (store_memory, retrieve_memory)
+- REST endpoints for easy testing (/store, /retrieve)
+- Automatic summarization on storage
+"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -33,7 +39,7 @@ def store_memory(
     category: str = "",
     tags: list[str] | None = None,
 ) -> dict:
-    """Store text as a searchable memory with semantic embedding."""
+    """Store text as a memory with automatic summarization."""
     metadata = {"source": source, "category": category, "tags": tags or []}
     memory_id = store.store(text, metadata)
     return {"id": memory_id, "status": "stored"}
@@ -46,7 +52,7 @@ def retrieve_memory(query: str, top_k: int = 5) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI App + REST Endpoints (for easy testing)
+# FastAPI Application
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,21 +61,29 @@ async def lifespan(app: FastAPI):
     store.close()
 
 
-app = FastAPI(title="MCP Memory Server", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="MCP Memory Server",
+    description="Semantic memory layer for AI coding agents",
+    version="0.2.0",
+    lifespan=lifespan,
+)
 
-# Mount MCP
+# Mount MCP endpoint
 app.mount("/mcp", mcp.streamable_http_app())
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "memory-mcp-server"}
 
 
-# Temporary REST endpoints (keep for now)
+# ---------------------------------------------------------------------------
+# REST Endpoints (for easy testing and debugging)
+# ---------------------------------------------------------------------------
 class StoreRequest(BaseModel):
     text: str
     metadata: dict = {}
+
 
 class RetrieveRequest(BaseModel):
     query: str
@@ -89,7 +103,7 @@ async def retrieve_memory_rest(request: RetrieveRequest):
 
 
 # ---------------------------------------------------------------------------
-# Run
+# Run Server
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     uvicorn.run("memory_server.main:app", host="0.0.0.0", port=8000, reload=True)
