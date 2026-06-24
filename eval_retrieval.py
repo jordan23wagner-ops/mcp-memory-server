@@ -173,63 +173,53 @@ QUERIES = [
     },
 ]
 
+ADVERSARIAL_QUERIES = [
+    {
+        "query": "why can't you run Python code on all your CPU cores at once",
+        "expected_tag": "python-gil",
+        "note": "Zero shared vocabulary with stored fact (no 'GIL', 'interpreter', 'threads', 'bytecodes')",
+    },
+    {
+        "query": "that database trick where readers never block writers",
+        "expected_tag": "postgres-mvcc",
+        "note": "Casual phrasing, no technical terms from fact (no 'MVCC', 'concurrent', 'transactions')",
+    },
+    {
+        "query": "I need to call a backend but only get back exactly the fields I ask for",
+        "expected_tag": "graphql-api",
+        "note": "Developer perspective, different framing than the stored fact",
+    },
+    {
+        "query": "how do you keep bad pointers from crashing your program",
+        "expected_tag": "rust-borrow",
+        "note": "Ambiguous: rust-ownership (memory safety) and rust-borrow (dangling pointers) both valid",
+    },
+    {
+        "query": "what was that thing where you let another site verify who the user is",
+        "expected_tag": "oauth2-flow",
+        "note": "Ambiguous: jwt-auth (signed tokens for auth) and oauth2-flow (delegated auth) both plausible",
+    },
+]
 
-def main():
-    print("=" * 70)
-    print("MCP Memory Server — Retrieval Evaluation")
-    print("=" * 70)
 
-    try:
-        requests.get(f"{BASE_URL}/health", timeout=3)
-    except requests.ConnectionError:
-        print(f"\nERROR: Cannot connect to server at {BASE_URL}")
-        sys.exit(1)
+def resolve_tag(result_id, tag_to_id):
+    for tag, mid in tag_to_id.items():
+        if mid == result_id:
+            return tag
+    return "?"
 
-    # Store all memories
-    tag_to_id = {}
-    print(f"\nStoring {len(MEMORIES)} memories (session={EVAL_SESSION})...")
-    for mem in MEMORIES:
-        resp = requests.post(f"{BASE_URL}/store", json={
-            "text": mem["text"],
-            "category": mem["category"],
-            "source": "eval",
-            "session_id": EVAL_SESSION,
-        })
-        resp.raise_for_status()
-        memory_id = resp.json()["id"]
-        tag_to_id[mem["id_tag"]] = memory_id
 
-    # Check dedup: near-duplicate tags should map to the same ID as their originals
-    dedup_pairs = [
-        ("python-gc", "python-gc-dup"),
-        ("docker-containers", "docker-containers-dup"),
-    ]
-    dedup_pass = 0
-    print("\n--- Deduplication Check ---")
-    for orig, dup in dedup_pairs:
-        same = tag_to_id[orig] == tag_to_id[dup]
-        status = "DEDUPED" if same else "NOT DEDUPED"
-        print(f"  {orig} vs {dup}: {status}")
-        if same:
-            dedup_pass += 1
-
-    # Wait for indexing + background summaries
-    print("\nWaiting 5s for indexing...")
-    time.sleep(5)
-
-    # Run queries
-    print(f"\nRunning {len(QUERIES)} queries (top_k=3)...\n")
+def run_query_set(label, queries, tag_to_id, session_id, verbose_misses=False):
+    print(f"\n--- {label} ({len(queries)} queries, top_k=3) ---\n")
     hits = 0
-    total = len(QUERIES)
-
-    header = f"{'Query':<55} {'Expected':<20} {'Got':<20} {'Result'}"
+    header = f"  {'Query':<55} {'Expected':<20} {'Got':<20} {'Result'}"
     print(header)
-    print("-" * len(header))
+    print("  " + "-" * (len(header) - 2))
 
-    for q in QUERIES:
+    for q in queries:
         resp = requests.post(f"{BASE_URL}/retrieve", json={
             "query": q["query"],
-            "session_id": EVAL_SESSION,
+            "session_id": session_id,
             "top_k": 3,
         })
         resp.raise_for_status()
@@ -245,26 +235,81 @@ def main():
             got_str = f"rank {rank}"
             status = "HIT"
         else:
-            got_tag = "?"
-            if results:
-                top_id = results[0]["id"]
-                for tag, mid in tag_to_id.items():
-                    if mid == top_id:
-                        got_tag = tag
-                        break
-            got_str = got_tag
+            got_str = resolve_tag(results[0]["id"], tag_to_id) if results else "empty"
             status = "MISS"
 
         query_short = q["query"][:53]
         print(f"  {query_short:<53} {q['expected_tag']:<20} {got_str:<20} {status}")
 
-    hit_rate = hits / total * 100
+        if not hit and verbose_misses and results:
+            print(f"    note: {q.get('note', '')}")
+            print(f"    expected_id: {expected_id}")
+            for i, r in enumerate(results[:3]):
+                rtag = resolve_tag(r["id"], tag_to_id)
+                print(f"    result[{i}]: tag={rtag}  id={r['id']}  distance={r['distance']:.4f}")
+
+    return hits, len(queries)
+
+
+def main():
+    print("=" * 70)
+    print("MCP Memory Server — Retrieval Evaluation")
+    print("=" * 70)
+
+    try:
+        requests.get(f"{BASE_URL}/health", timeout=3)
+    except requests.ConnectionError:
+        print(f"\nERROR: Cannot connect to server at {BASE_URL}")
+        sys.exit(1)
+
+    tag_to_id = {}
+    print(f"\nStoring {len(MEMORIES)} memories (session={EVAL_SESSION})...")
+    for mem in MEMORIES:
+        resp = requests.post(f"{BASE_URL}/store", json={
+            "text": mem["text"],
+            "category": mem["category"],
+            "source": "eval",
+            "session_id": EVAL_SESSION,
+        })
+        resp.raise_for_status()
+        memory_id = resp.json()["id"]
+        tag_to_id[mem["id_tag"]] = memory_id
+
+    dedup_pairs = [
+        ("python-gc", "python-gc-dup"),
+        ("docker-containers", "docker-containers-dup"),
+    ]
+    dedup_pass = 0
+    print("\n--- Deduplication Check ---")
+    for orig, dup in dedup_pairs:
+        same = tag_to_id[orig] == tag_to_id[dup]
+        status = "DEDUPED" if same else "NOT DEDUPED"
+        print(f"  {orig} vs {dup}: {status}")
+        if same:
+            dedup_pass += 1
+
+    print("\nWaiting 5s for indexing...")
+    time.sleep(5)
+
+    orig_hits, orig_total = run_query_set(
+        "Original Queries", QUERIES, tag_to_id, EVAL_SESSION
+    )
+    adv_hits, adv_total = run_query_set(
+        "Adversarial Queries", ADVERSARIAL_QUERIES, tag_to_id, EVAL_SESSION,
+        verbose_misses=True,
+    )
+
+    total_hits = orig_hits + adv_hits
+    total_queries = orig_total + adv_total
+
     print(f"\n{'=' * 70}")
-    print(f"Hit Rate: {hits}/{total} = {hit_rate:.1f}%")
-    print(f"Dedup:    {dedup_pass}/{len(dedup_pairs)} near-duplicates correctly merged")
+    print(f"Original:    {orig_hits}/{orig_total} = {orig_hits/orig_total*100:.1f}%")
+    print(f"Adversarial: {adv_hits}/{adv_total} = {adv_hits/adv_total*100:.1f}%")
+    print(f"Combined:    {total_hits}/{total_queries} = {total_hits/total_queries*100:.1f}%")
+    print(f"Dedup:       {dedup_pass}/{len(dedup_pairs)} near-duplicates correctly merged")
     print(f"{'=' * 70}")
 
-    return 0 if hit_rate >= 80 else 1
+    return 0 if (orig_hits / orig_total) >= 0.8 else 1
 
 
 if __name__ == "__main__":

@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 RECENCY_DECAY_WEIGHT = 0.01
 DUPLICATE_DISTANCE_THRESHOLD = 0.05
+_REFUSAL_PATTERNS = [
+    "no text provided",
+    "i don't see any text",
+    "please provide the text",
+    "you haven't provided",
+    "no text to summarize",
+    "provide the text you",
+    "i cannot summarize",
+    "there is no text",
+]
 
 
 class MemoryStore:
@@ -64,6 +74,13 @@ class MemoryStore:
         else:
             logger.info(f"Collection '{collection_name}' already exists")
 
+    @staticmethod
+    def _is_usable_summary(response_text: str) -> bool:
+        if not response_text or len(response_text) < 10:
+            return False
+        lower = response_text.lower()
+        return not any(pat in lower for pat in _REFUSAL_PATTERNS)
+
     def summarize(self, text: str) -> str:
         prompt = f"Summarize the following text in 2-3 sentences. Focus on the key points.\n\nText:\n{text}\n\nSummary:"
 
@@ -76,8 +93,11 @@ class MemoryStore:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
-            logger.info("Summarization via groq")
-            return response.choices[0].message.content.strip()
+            result = response.choices[0].message.content.strip()
+            if self._is_usable_summary(result):
+                logger.info("Summarization via groq")
+                return result
+            logger.warning(f"Groq returned unusable summary, falling through: {result!r}")
         except Exception as e:
             logger.warning(f"Groq summarization failed: {e}")
 
@@ -90,13 +110,16 @@ class MemoryStore:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
-            logger.info("Summarization via anthropic (fallback)")
-            return message.content[0].text.strip()
+            result = message.content[0].text.strip()
+            if self._is_usable_summary(result):
+                logger.info("Summarization via anthropic (fallback)")
+                return result
+            logger.warning(f"Anthropic returned unusable summary, falling through: {result!r}")
         except Exception as e:
             logger.warning(f"Anthropic summarization failed: {e}")
 
         # 3) Last resort: truncation
-        logger.warning("Summarization via truncation (all providers failed)")
+        logger.warning("Summarization via truncation (all providers failed or returned unusable output)")
         return text[:600]
 
     def store(self, text: str, metadata: dict = None) -> str:

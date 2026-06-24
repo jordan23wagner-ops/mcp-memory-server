@@ -4,9 +4,12 @@ A semantic memory layer for AI coding agents. It allows agents to store and retr
 
 ## Features
 
-- **Automatic Summarization** — Stores both the original text and a concise summary (Groq primary, Anthropic fallback).
-- **Semantic Retrieval** — Uses vector embeddings based on summaries for better relevance.
-- **MCP Native Support** — Exposes `store_memory` and `retrieve_memory` as MCP tools.
+- **Automatic Summarization** — Stores the original text and generates a concise summary in the background (Groq primary, Anthropic fallback).
+- **Semantic Retrieval** — Uses vector embeddings based on the raw text for accurate relevance matching. Returns summaries by default to save tokens; full text is opt-in via `include_full_text`.
+- **Recency-Weighted Reranking** — Retrieval blends vector similarity with a recency score so recent memories get a slight ranking boost over older ones with similar content.
+- **Near-Duplicate Detection** — Storing a memory that closely matches an existing one updates the existing record instead of creating a duplicate.
+- **Non-Blocking Writes** — Store calls return immediately after embedding; summarization runs asynchronously and populates a few seconds later.
+- **MCP Native Support** — Exposes `store_memory`, `retrieve_memory`, and `delete_memory` as MCP tools.
 - **REST API** — Simple HTTP endpoints for testing and integration (`/store`, `/retrieve`, `/health`).
 - **Session & Project Support** — Optional `session_id` and `project_id` fields for organizing memories.
 - **Efficient** — Uses ONNX backend with quantized embeddings for lower memory usage.
@@ -59,9 +62,12 @@ curl -X POST http://localhost:8000/retrieve \
     "top_k": 5,
     "session_id": "session-123",
     "category": "project",
-    "source": "conversation"
+    "source": "conversation",
+    "include_full_text": false
   }'
 ```
+
+> **Note:** Retrieval returns summaries and metadata by default. Set `"include_full_text": true` to include the original text in results. This keeps token usage low when only the summary is needed.
 
 **Delete a memory**
 
@@ -79,11 +85,17 @@ http://localhost:8000/mcp
 
 **Available tools:**
 
-- `store_memory(text, source, category, tags, session_id, project_id)`
-- `retrieve_memory(query, top_k, session_id, project_id, category, source)`
+- `store_memory(text, source, category, tags, session_id, project_id)` — Returns immediately; summarization runs in the background. The summary field on a freshly stored memory may be empty for a few seconds until the background task completes.
+- `retrieve_memory(query, top_k, session_id, project_id, category, source, include_full_text)` — Returns summary + metadata by default. Pass `include_full_text=true` to include original text.
 - `delete_memory(memory_id)`
 
 These can be called directly by any MCP-compatible agent.
+
+### Behavior Notes
+
+- **Async summarization**: Both `store_memory` and `POST /store` return as soon as the embedding is computed and the record is inserted. The LLM-generated summary is populated asynchronously a few seconds later. If you retrieve a memory immediately after storing it, the `summary` field may be empty.
+- **Near-duplicate merging**: If a new memory's embedding is within a cosine distance of 0.05 of an existing record, the existing record is updated rather than creating a new one. This prevents redundant entries when the same fact is stored with minor wording differences.
+- **Recency reranking**: Retrieved results are reranked using a combined score of vector similarity and recency. Recent memories receive a slight boost. The decay weight is small enough (0.01 per day) that strong semantic matches still outrank recent but less relevant ones.
 
 ## Environment Variables
 
@@ -102,9 +114,16 @@ Summarization follows a three-step fallback chain: Groq first (free), Anthropic 
 ## Architecture
 
 - **Vector Database**: Weaviate (local)
-- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (ONNX backend)
-- **Summarization**: Groq (Llama 3.1 8B, primary) / Anthropic Claude (paid fallback)
+- **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (ONNX backend), computed from raw text
+- **Summarization**: Groq (Llama 3.1 8B, primary) / Anthropic Claude (paid fallback), runs asynchronously after insert
 - **Framework**: FastAPI + FastMCP
+
+**Tunable constants** (hardcoded in `store.py`, not env vars):
+
+| Constant                       | Default | Purpose |
+|-------------------------------|---------|---------|
+| `RECENCY_DECAY_WEIGHT`        | `0.01`  | Score penalty per day of age during retrieval reranking |
+| `DUPLICATE_DISTANCE_THRESHOLD` | `0.05`  | Max cosine distance to consider a new memory a duplicate of an existing one |
 
 ## Project Structure
 
@@ -118,6 +137,7 @@ mcp-memory-server/
 ├── requirements.txt
 ├── diagnose.py
 ├── test_e2e.py
+├── eval_retrieval.py
 └── README.md
 ```
 
