@@ -49,7 +49,7 @@ curl -X POST http://localhost:8000/store \
   }'
 ```
 
-**Retrieve memories**
+**Retrieve memories** (with optional filters)
 
 ```bash
 curl -X POST http://localhost:8000/retrieve \
@@ -57,8 +57,16 @@ curl -X POST http://localhost:8000/retrieve \
   -d '{
     "query": "memory layer",
     "top_k": 5,
-    "session_id": "session-123"
+    "session_id": "session-123",
+    "category": "project",
+    "source": "conversation"
   }'
+```
+
+**Delete a memory**
+
+```bash
+curl -X DELETE http://localhost:8000/memory/<memory-id>
 ```
 
 ### MCP Tools
@@ -72,15 +80,19 @@ http://localhost:8000/mcp
 **Available tools:**
 
 - `store_memory(text, source, category, tags, session_id, project_id)`
-- `retrieve_memory(query, top_k, session_id, project_id)`
+- `retrieve_memory(query, top_k, session_id, project_id, category, source)`
+- `delete_memory(memory_id)`
 
 These can be called directly by any MCP-compatible agent.
 
 ## Environment Variables
 
-| Variable              | Description                              | Required |
-|-----------------------|------------------------------------------|----------|
-| `ANTHROPIC_API_KEY`   | Your Anthropic API key for summarization | Yes      |
+| Variable              | Description                              | Default     |
+|-----------------------|------------------------------------------|-------------|
+| `ANTHROPIC_API_KEY`   | Your Anthropic API key for summarization | *(required)* |
+| `WEAVIATE_HOST`       | Weaviate hostname                        | `localhost`  |
+| `WEAVIATE_PORT`       | Weaviate HTTP port                       | `8080`       |
+| `WEAVIATE_GRPC_PORT`  | Weaviate gRPC port                       | `50051`      |
 
 ## Architecture
 
@@ -100,6 +112,7 @@ mcp-memory-server/
 ├── docker-compose.yml
 ├── requirements.txt
 ├── diagnose.py
+├── test_e2e.py
 └── README.md
 ```
 

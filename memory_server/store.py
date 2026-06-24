@@ -1,6 +1,7 @@
 ﻿"""Weaviate-backed memory store with automatic summarization."""
 
 import logging
+import os
 from datetime import datetime, timezone
 
 import weaviate
@@ -17,11 +18,15 @@ class MemoryStore:
         self.embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
     def connect(self):
-        logger.info("Connecting to Weaviate at localhost:8080")
+        host = os.environ.get("WEAVIATE_HOST", "localhost")
+        port = int(os.environ.get("WEAVIATE_PORT", "8080"))
+        grpc_port = int(os.environ.get("WEAVIATE_GRPC_PORT", "50051"))
+
+        logger.info(f"Connecting to Weaviate at {host}:{port}")
         self.client = weaviate.connect_to_local(
-            host="localhost",
-            port=8080,
-            grpc_port=50051
+            host=host,
+            port=port,
+            grpc_port=grpc_port
         )
 
         logger.info(f"Loading embedding model: {self.embedding_model_name}")
@@ -87,8 +92,8 @@ Summary:"""
         metadata["original_length"] = len(text)
         metadata["created_at"] = datetime.now(timezone.utc).isoformat()
 
-        metadata.setdefault("session_id", "")
-        metadata.setdefault("project_id", "")
+        metadata["session_id"] = metadata.get("session_id") or ""
+        metadata["project_id"] = metadata.get("project_id") or ""
 
         embedding = self.model.encode(summary).tolist()
 
@@ -103,9 +108,26 @@ Summary:"""
             properties=data_object,
             vector=embedding
         )
-        return str(result.uuid)
+        return str(result)
 
-    def retrieve(self, query: str, top_k: int = 5, session_id: str = None, project_id: str = None):
+    def delete(self, memory_id: str) -> bool:
+        collection = self.client.collections.get("Memory")
+        try:
+            collection.data.delete_by_id(memory_id)
+            return True
+        except Exception as e:
+            logger.warning(f"Delete failed for {memory_id}: {e}")
+            return False
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        session_id: str | None = None,
+        project_id: str | None = None,
+        category: str | None = None,
+        source: str | None = None,
+    ):
         embedding = self.model.encode(query).tolist()
 
         collection = self.client.collections.get("Memory")
@@ -115,6 +137,10 @@ Summary:"""
             filters.append(weaviate.classes.query.Filter.by_property("session_id").equal(session_id))
         if project_id:
             filters.append(weaviate.classes.query.Filter.by_property("project_id").equal(project_id))
+        if category:
+            filters.append(weaviate.classes.query.Filter.by_property("category").equal(category))
+        if source:
+            filters.append(weaviate.classes.query.Filter.by_property("source").equal(source))
 
         response = collection.query.near_vector(
             near_vector=embedding,

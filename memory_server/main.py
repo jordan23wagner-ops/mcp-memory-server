@@ -1,9 +1,10 @@
 ﻿"""FastAPI + MCP server for semantic memory storage and retrieval.
 
 Features:
-- MCP tools for agents (store_memory, retrieve_memory)
-- REST endpoints for easy testing (/store, /retrieve)
+- MCP tools for agents (store_memory, retrieve_memory, delete_memory)
+- REST endpoints for easy testing (/store, /retrieve, /memory/{id})
 - Automatic summarization on storage
+- Filtering by session_id, project_id, category, source
 """
 
 import logging
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Shared objects
 # ---------------------------------------------------------------------------
 store = MemoryStore()
-mcp = FastMCP("Memory Server")
+mcp = FastMCP("Memory Server", streamable_http_path="/")
 
 
 # ---------------------------------------------------------------------------
@@ -59,9 +60,27 @@ def retrieve_memory(
     top_k: int = 5,
     session_id: str = None,
     project_id: str = None,
+    category: str = None,
+    source: str = None,
 ) -> list[dict]:
-    """Retrieve most relevant memories (optionally filtered by session/project)."""
-    return store.retrieve(query, top_k=top_k, session_id=session_id, project_id=project_id)
+    """Retrieve most relevant memories (optionally filtered by session/project/category/source)."""
+    return store.retrieve(
+        query,
+        top_k=top_k,
+        session_id=session_id,
+        project_id=project_id,
+        category=category,
+        source=source,
+    )
+
+
+@mcp.tool()
+def delete_memory(memory_id: str) -> dict:
+    """Delete a memory by its ID."""
+    success = store.delete(memory_id)
+    if success:
+        return {"id": memory_id, "status": "deleted"}
+    return {"id": memory_id, "status": "not_found"}
 
 
 # ---------------------------------------------------------------------------
@@ -70,14 +89,15 @@ def retrieve_memory(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.connect()
-    yield
+    async with mcp.session_manager.run():
+        yield
     store.close()
 
 
 app = FastAPI(
     title="MCP Memory Server",
     description="Semantic memory layer for AI coding agents",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -98,15 +118,17 @@ class StoreRequest(BaseModel):
     source: str = ""
     category: str = ""
     tags: list[str] = []
-    session_id: str = ""
-    project_id: str = ""
+    session_id: str | None = ""
+    project_id: str | None = ""
 
 
 class RetrieveRequest(BaseModel):
     query: str
     top_k: int = 5
-    session_id: str = None
-    project_id: str = None
+    session_id: str | None = None
+    project_id: str | None = None
+    category: str | None = None
+    source: str | None = None
 
 
 @app.post("/store")
@@ -129,8 +151,18 @@ async def retrieve_memory_rest(req: RetrieveRequest):
         top_k=req.top_k,
         session_id=req.session_id,
         project_id=req.project_id,
+        category=req.category,
+        source=req.source,
     )
     return {"results": results}
+
+
+@app.delete("/memory/{memory_id}")
+async def delete_memory_rest(memory_id: str):
+    success = store.delete(memory_id)
+    if success:
+        return {"id": memory_id, "status": "deleted"}
+    return {"id": memory_id, "status": "not_found"}
 
 
 # ---------------------------------------------------------------------------
