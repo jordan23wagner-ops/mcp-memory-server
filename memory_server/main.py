@@ -2,8 +2,9 @@
 
 Features:
 - MCP tools for agents (store_memory, retrieve_memory)
-- REST endpoints for easy testing (/store, /retrieve)
-- Automatic summarization on storage
+- REST endpoints for easy testing
+- Automatic summarization
+- Optional session_id and project_id support
 """
 
 import logging
@@ -38,17 +39,30 @@ def store_memory(
     source: str = "",
     category: str = "",
     tags: list[str] | None = None,
+    session_id: str = "",
+    project_id: str = "",
 ) -> dict:
     """Store text as a memory with automatic summarization."""
-    metadata = {"source": source, "category": category, "tags": tags or []}
+    metadata = {
+        "source": source,
+        "category": category,
+        "tags": tags or [],
+        "session_id": session_id,
+        "project_id": project_id,
+    }
     memory_id = store.store(text, metadata)
     return {"id": memory_id, "status": "stored"}
 
 
 @mcp.tool()
-def retrieve_memory(query: str, top_k: int = 5) -> list[dict]:
-    """Retrieve most relevant memories using semantic search."""
-    return store.retrieve(query, top_k=top_k)
+def retrieve_memory(
+    query: str,
+    top_k: int = 5,
+    session_id: str = None,
+    project_id: str = None,
+) -> list[dict]:
+    """Retrieve most relevant memories (optionally filtered by session/project)."""
+    return store.retrieve(query, top_k=top_k, session_id=session_id, project_id=project_id)
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +78,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MCP Memory Server",
     description="Semantic memory layer for AI coding agents",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -78,27 +92,45 @@ async def health():
 
 
 # ---------------------------------------------------------------------------
-# REST Endpoints (for easy testing and debugging)
+# REST Endpoints
 # ---------------------------------------------------------------------------
 class StoreRequest(BaseModel):
     text: str
-    metadata: dict = {}
+    source: str = ""
+    category: str = ""
+    tags: list[str] = []
+    session_id: str = ""
+    project_id: str = ""
 
 
 class RetrieveRequest(BaseModel):
     query: str
-    limit: int = 5
+    top_k: int = 5
+    session_id: str = None
+    project_id: str = None
 
 
 @app.post("/store")
-async def store_memory_rest(request: StoreRequest):
-    memory_id = store.store(request.text, request.metadata)
+async def store_memory_rest(req: StoreRequest):
+    metadata = {
+        "source": req.source,
+        "category": req.category,
+        "tags": req.tags,
+        "session_id": req.session_id,
+        "project_id": req.project_id,
+    }
+    memory_id = store.store(req.text, metadata)
     return {"id": memory_id, "status": "stored"}
 
 
 @app.post("/retrieve")
-async def retrieve_memory_rest(request: RetrieveRequest):
-    results = store.retrieve(request.query, top_k=request.limit)
+async def retrieve_memory_rest(req: RetrieveRequest):
+    results = store.retrieve(
+        req.query,
+        top_k=req.top_k,
+        session_id=req.session_id,
+        project_id=req.project_id,
+    )
     return {"results": results}
 
 
