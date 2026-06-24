@@ -1,4 +1,4 @@
-"""Weaviate-backed memory store with automatic summarization."""
+﻿"""Weaviate-backed memory store with automatic summarization."""
 
 import logging
 from datetime import datetime, timezone
@@ -17,7 +17,6 @@ class MemoryStore:
         self.embedding_model_name = "sentence-transformers/all-MiniLM-L6-v2"
 
     def connect(self):
-        """Connect to Weaviate and load the embedding model."""
         logger.info("Connecting to Weaviate at localhost:8080")
         self.client = weaviate.connect_to_local(
             host="localhost",
@@ -35,7 +34,6 @@ class MemoryStore:
         logger.info("MemoryStore ready")
 
     def _ensure_collection(self):
-        """Create the Memory collection if it doesn't exist."""
         collection_name = "Memory"
 
         if not self.client.collections.exists(collection_name):
@@ -59,7 +57,6 @@ class MemoryStore:
             logger.info(f"Collection '{collection_name}' already exists")
 
     def summarize(self, text: str) -> str:
-        """Generate a concise summary using Claude."""
         try:
             import anthropic
             client = anthropic.Anthropic()
@@ -82,7 +79,6 @@ Summary:"""
             return text[:600]
 
     def store(self, text: str, metadata: dict = None) -> str:
-        """Store text with automatic summarization."""
         if metadata is None:
             metadata = {}
 
@@ -91,7 +87,6 @@ Summary:"""
         metadata["original_length"] = len(text)
         metadata["created_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Default empty values for new fields
         metadata.setdefault("session_id", "")
         metadata.setdefault("project_id", "")
 
@@ -111,20 +106,15 @@ Summary:"""
         return str(result.uuid)
 
     def retrieve(self, query: str, top_k: int = 5, session_id: str = None, project_id: str = None):
-        """Retrieve most relevant memories (optionally filtered by session/project)."""
         embedding = self.model.encode(query).tolist()
 
         collection = self.client.collections.get("Memory")
 
         filters = []
         if session_id:
-            filters.append(
-                weaviate.classes.query.Filter.by_property("session_id").equal(session_id)
-            )
+            filters.append(weaviate.classes.query.Filter.by_property("session_id").equal(session_id))
         if project_id:
-            filters.append(
-                weaviate.classes.query.Filter.by_property("project_id").equal(project_id)
-            )
+            filters.append(weaviate.classes.query.Filter.by_property("project_id").equal(project_id))
 
         response = collection.query.near_vector(
             near_vector=embedding,

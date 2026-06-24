@@ -1,10 +1,9 @@
-"""FastAPI + MCP server for semantic memory storage and retrieval.
+﻿"""FastAPI + MCP server for semantic memory storage and retrieval.
 
 Features:
 - MCP tools for agents (store_memory, retrieve_memory)
-- REST endpoints for easy testing
-- Automatic summarization
-- Optional session_id and project_id support
+- REST endpoints for easy testing (/store, /retrieve)
+- Automatic summarization on storage
 """
 
 import logging
