@@ -28,10 +28,9 @@ class MemoryStore:
         logger.info(f"Loading embedding model: {self.embedding_model_name}")
         self.model = SentenceTransformer(
             self.embedding_model_name,
-            backend="onnx"   # Lower memory usage
+            backend="onnx"
         )
 
-        # Ensure collection exists
         self._ensure_collection()
         logger.info("MemoryStore ready")
 
@@ -49,6 +48,8 @@ class MemoryStore:
                     weaviate.classes.config.Property(name="source", data_type=weaviate.classes.config.DataType.TEXT),
                     weaviate.classes.config.Property(name="category", data_type=weaviate.classes.config.DataType.TEXT),
                     weaviate.classes.config.Property(name="tags", data_type=weaviate.classes.config.DataType.TEXT_ARRAY),
+                    weaviate.classes.config.Property(name="session_id", data_type=weaviate.classes.config.DataType.TEXT),
+                    weaviate.classes.config.Property(name="project_id", data_type=weaviate.classes.config.DataType.TEXT),
                     weaviate.classes.config.Property(name="original_length", data_type=weaviate.classes.config.DataType.INT),
                     weaviate.classes.config.Property(name="created_at", data_type=weaviate.classes.config.DataType.DATE),
                 ]
@@ -76,23 +77,24 @@ Summary:"""
                 messages=[{"role": "user", "content": prompt}]
             )
             return message.content[0].text.strip()
-
         except Exception as e:
             logger.warning(f"Summarization failed: {e}")
-            return text[:600]  # Fallback
+            return text[:600]
 
     def store(self, text: str, metadata: dict = None) -> str:
         """Store text with automatic summarization."""
         if metadata is None:
             metadata = {}
 
-        # Generate summary
         summary = self.summarize(text)
         metadata["summary"] = summary
         metadata["original_length"] = len(text)
         metadata["created_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Create embedding from summary
+        # Default empty values for new fields
+        metadata.setdefault("session_id", "")
+        metadata.setdefault("project_id", "")
+
         embedding = self.model.encode(summary).tolist()
 
         data_object = {
@@ -108,32 +110,50 @@ Summary:"""
         )
         return str(result.uuid)
 
-   def retrieve(self, query: str, top_k: int = 5):
-    """Retrieve most relevant memories by searching on summaries."""
-    embedding = self.model.encode(query).tolist()
+    def retrieve(self, query: str, top_k: int = 5, session_id: str = None, project_id: str = None):
+        """Retrieve most relevant memories (optionally filtered by session/project)."""
+        embedding = self.model.encode(query).tolist()
 
-    collection = self.client.collections.get("Memory")
-    response = collection.query.near_vector(
-        near_vector=embedding,
-        limit=top_k,
-        return_properties=[
-            "text", "summary", "source", "category", 
-            "tags", "original_length", "created_at"
-        ]
-    )
+        collection = self.client.collections.get("Memory")
 
-    results = []
-    for obj in response.objects:
-        results.append({
-            "id": str(obj.uuid),
-            "text": obj.properties.get("text"),
-            "summary": obj.properties.get("summary"),
-            "source": obj.properties.get("source"),
-            "category": obj.properties.get("category"),
-            "tags": obj.properties.get("tags", []),
-            "original_length": obj.properties.get("original_length"),
-            "created_at": obj.properties.get("created_at"),
-            "distance": obj.metadata.distance if obj.metadata else None
-        })
-    return results
+        filters = []
+        if session_id:
+            filters.append(
+                weaviate.classes.query.Filter.by_property("session_id").equal(session_id)
+            )
+        if project_id:
+            filters.append(
+                weaviate.classes.query.Filter.by_property("project_id").equal(project_id)
+            )
+
+        response = collection.query.near_vector(
+            near_vector=embedding,
+            limit=top_k,
+            return_properties=[
+                "text", "summary", "source", "category",
+                "tags", "session_id", "project_id",
+                "original_length", "created_at"
+            ],
+            filters=weaviate.classes.query.Filter.all_of(filters) if filters else None
+        )
+
+        results = []
+        for obj in response.objects:
+            results.append({
+                "id": str(obj.uuid),
+                "text": obj.properties.get("text"),
+                "summary": obj.properties.get("summary"),
+                "source": obj.properties.get("source"),
+                "category": obj.properties.get("category"),
+                "tags": obj.properties.get("tags", []),
+                "session_id": obj.properties.get("session_id", ""),
+                "project_id": obj.properties.get("project_id", ""),
+                "original_length": obj.properties.get("original_length"),
+                "created_at": obj.properties.get("created_at"),
+                "distance": obj.metadata.distance if obj.metadata else None
+            })
+        return results
+
+    def close(self):
+        if self.client:
             self.client.close()
