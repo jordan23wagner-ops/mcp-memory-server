@@ -108,19 +108,32 @@ Summary:"""
         )
         return str(result.uuid)
 
-    def retrieve(self, query: str, top_k: int = 5):
-        """Retrieve most relevant memories using semantic search."""
-        embedding = self.model.encode(query).tolist()
+   def retrieve(self, query: str, top_k: int = 5):
+    """Retrieve most relevant memories by searching on summaries."""
+    embedding = self.model.encode(query).tolist()
 
-        collection = self.client.collections.get("Memory")
-        response = collection.query.near_vector(
-            near_vector=embedding,
-            limit=top_k,
-            return_properties=["text", "summary", "source", "category", "tags", "original_length", "created_at"]
-        )
+    collection = self.client.collections.get("Memory")
+    response = collection.query.near_vector(
+        near_vector=embedding,
+        limit=top_k,
+        return_properties=[
+            "text", "summary", "source", "category", 
+            "tags", "original_length", "created_at"
+        ]
+    )
 
-        return [obj.properties for obj in response.objects]
-
-    def close(self):
-        if self.client:
+    results = []
+    for obj in response.objects:
+        results.append({
+            "id": str(obj.uuid),
+            "text": obj.properties.get("text"),
+            "summary": obj.properties.get("summary"),
+            "source": obj.properties.get("source"),
+            "category": obj.properties.get("category"),
+            "tags": obj.properties.get("tags", []),
+            "original_length": obj.properties.get("original_length"),
+            "created_at": obj.properties.get("created_at"),
+            "distance": obj.metadata.distance if obj.metadata else None
+        })
+    return results
             self.client.close()
