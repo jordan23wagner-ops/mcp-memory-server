@@ -68,8 +68,12 @@ def test_store_and_retrieve_basic():
 
     match = results[0]
     check("result has summary", bool(match.get("summary")))
-    check("result has text", "decorator" in match.get("text", "").lower())
+    check("text excluded by default", "text" not in match)
     check("result has distance", match.get("distance") is not None)
+
+    results_full = retrieve_memories("python decorators", top_k=3, include_full_text=True)
+    match_full = results_full[0]
+    check("include_full_text returns text", "decorator" in match_full.get("text", "").lower())
 
 
 # ── Store with session_id and project_id ──────────────────────────────

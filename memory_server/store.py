@@ -10,6 +10,9 @@ from sentence_transformers import SentenceTransformer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+RECENCY_DECAY_WEIGHT = 0.01
+DUPLICATE_DISTANCE_THRESHOLD = 0.05
+
 
 class MemoryStore:
     def __init__(self):
@@ -100,28 +103,63 @@ class MemoryStore:
         if metadata is None:
             metadata = {}
 
-        summary = self.summarize(text)
-        metadata["summary"] = summary
+        metadata["summary"] = ""
         metadata["original_length"] = len(text)
         metadata["created_at"] = datetime.now(timezone.utc).isoformat()
 
         metadata["session_id"] = metadata.get("session_id") or ""
         metadata["project_id"] = metadata.get("project_id") or ""
 
-        embedding = self.model.encode(summary).tolist()
+        embedding = self.model.encode(text).tolist()
+
+        collection = self.client.collections.get("Memory")
+
+        existing = collection.query.near_vector(
+            near_vector=embedding,
+            limit=1,
+            return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
+            return_properties=["text"],
+        )
+        if (
+            existing.objects
+            and existing.objects[0].metadata.distance is not None
+            and existing.objects[0].metadata.distance <= DUPLICATE_DISTANCE_THRESHOLD
+        ):
+            existing_id = str(existing.objects[0].uuid)
+            logger.info(
+                f"Duplicate detected, updating existing memory {existing_id} instead of inserting"
+            )
+            collection.data.update(
+                uuid=existing_id,
+                properties={
+                    "text": text,
+                    "summary": "",
+                    **metadata,
+                },
+                vector=embedding,
+            )
+            return existing_id
 
         data_object = {
             "text": text,
-            "summary": summary,
+            "summary": "",
             **metadata
         }
 
-        collection = self.client.collections.get("Memory")
         result = collection.data.insert(
             properties=data_object,
             vector=embedding
         )
         return str(result)
+
+    def finalize_summary(self, memory_id: str, text: str):
+        summary = self.summarize(text)
+        collection = self.client.collections.get("Memory")
+        collection.data.update(
+            uuid=memory_id,
+            properties={"summary": summary}
+        )
+        logger.info(f"Summary finalized for memory {memory_id}")
 
     def delete(self, memory_id: str) -> bool:
         collection = self.client.collections.get("Memory")
@@ -140,6 +178,7 @@ class MemoryStore:
         project_id: str | None = None,
         category: str | None = None,
         source: str | None = None,
+        include_full_text: bool = False,
     ):
         embedding = self.model.encode(query).tolist()
 
@@ -155,22 +194,45 @@ class MemoryStore:
         if source:
             filters.append(weaviate.classes.query.Filter.by_property("source").equal(source))
 
+        return_properties = [
+            "summary", "source", "category",
+            "tags", "session_id", "project_id",
+            "original_length", "created_at"
+        ]
+        if include_full_text:
+            return_properties.insert(0, "text")
+
+        fetch_limit = min(top_k * 3, 30)
+
         response = collection.query.near_vector(
             near_vector=embedding,
-            limit=top_k,
-            return_properties=[
-                "text", "summary", "source", "category",
-                "tags", "session_id", "project_id",
-                "original_length", "created_at"
-            ],
+            limit=fetch_limit,
+            return_properties=return_properties,
+            return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
             filters=weaviate.classes.query.Filter.all_of(filters) if filters else None
         )
 
-        results = []
+        now = datetime.now(timezone.utc)
+        candidates = []
         for obj in response.objects:
-            results.append({
+            distance = obj.metadata.distance if obj.metadata else 0.0
+            vector_similarity = 1.0 - (distance or 0.0)
+
+            created_at = obj.properties.get("created_at")
+            age_days = 0.0
+            if created_at:
+                if isinstance(created_at, str):
+                    created_dt = datetime.fromisoformat(created_at)
+                else:
+                    created_dt = created_at
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+                age_days = (now - created_dt).total_seconds() / 86400.0
+
+            combined_score = vector_similarity - (RECENCY_DECAY_WEIGHT * age_days)
+
+            entry = {
                 "id": str(obj.uuid),
-                "text": obj.properties.get("text"),
                 "summary": obj.properties.get("summary"),
                 "source": obj.properties.get("source"),
                 "category": obj.properties.get("category"),
@@ -179,9 +241,14 @@ class MemoryStore:
                 "project_id": obj.properties.get("project_id", ""),
                 "original_length": obj.properties.get("original_length"),
                 "created_at": obj.properties.get("created_at"),
-                "distance": obj.metadata.distance if obj.metadata else None
-            })
-        return results
+                "distance": distance,
+            }
+            if include_full_text:
+                entry["text"] = obj.properties.get("text")
+            candidates.append((combined_score, entry))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in candidates[:top_k]]
 
     def close(self):
         if self.client:

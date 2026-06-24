@@ -7,11 +7,12 @@ Features:
 - Filtering by session_id, project_id, category, source
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from pydantic import BaseModel
 
 from mcp.server.fastmcp import FastMCP
@@ -34,7 +35,7 @@ mcp = FastMCP("Memory Server", streamable_http_path="/")
 # MCP Tools
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def store_memory(
+async def store_memory(
     text: str,
     source: str = "",
     category: str = "",
@@ -51,6 +52,9 @@ def store_memory(
         "project_id": project_id,
     }
     memory_id = store.store(text, metadata)
+    asyncio.get_event_loop().run_in_executor(
+        None, store.finalize_summary, memory_id, text
+    )
     return {"id": memory_id, "status": "stored"}
 
 
@@ -58,10 +62,11 @@ def store_memory(
 def retrieve_memory(
     query: str,
     top_k: int = 5,
-    session_id: str = None,
-    project_id: str = None,
-    category: str = None,
-    source: str = None,
+    session_id: str | None = None,
+    project_id: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    include_full_text: bool = False,
 ) -> list[dict]:
     """Retrieve most relevant memories (optionally filtered by session/project/category/source)."""
     return store.retrieve(
@@ -71,6 +76,7 @@ def retrieve_memory(
         project_id=project_id,
         category=category,
         source=source,
+        include_full_text=include_full_text,
     )
 
 
@@ -129,10 +135,11 @@ class RetrieveRequest(BaseModel):
     project_id: str | None = None
     category: str | None = None
     source: str | None = None
+    include_full_text: bool = False
 
 
 @app.post("/store")
-async def store_memory_rest(req: StoreRequest):
+async def store_memory_rest(req: StoreRequest, background_tasks: BackgroundTasks):
     metadata = {
         "source": req.source,
         "category": req.category,
@@ -141,6 +148,7 @@ async def store_memory_rest(req: StoreRequest):
         "project_id": req.project_id,
     }
     memory_id = store.store(req.text, metadata)
+    background_tasks.add_task(store.finalize_summary, memory_id, req.text)
     return {"id": memory_id, "status": "stored"}
 
 
@@ -153,6 +161,7 @@ async def retrieve_memory_rest(req: RetrieveRequest):
         project_id=req.project_id,
         category=req.category,
         source=req.source,
+        include_full_text=req.include_full_text,
     )
     return {"results": results}
 
