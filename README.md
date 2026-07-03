@@ -42,6 +42,22 @@ MEMORY_BACKEND=weaviate python -m memory_server
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) in your browser to test the API.
 
+## Connect from an MCP client
+
+The server exposes MCP over streamable HTTP at `http://localhost:8000/mcp` — any MCP-compatible agent can use it.
+
+**Claude Code**
+
+```bash
+claude mcp add memory --transport http http://localhost:8000/mcp
+```
+
+**Hermes Agent** (or any other MCP client) — add an MCP server entry pointing at
+`http://localhost:8000/mcp` in your client's MCP configuration.
+
+Agents get three tools: `store_memory`, `retrieve_memory`, `delete_memory` — with
+summaries returned by default so retrieval stays token-cheap.
+
 ## Usage
 
 ### REST Endpoints
