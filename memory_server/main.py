@@ -9,6 +9,7 @@ Features:
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -16,7 +17,6 @@ from fastapi import BackgroundTasks, FastAPI
 from pydantic import BaseModel
 
 from mcp.server.fastmcp import FastMCP
-from memory_server.store import MemoryStore
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -27,7 +27,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Shared objects
 # ---------------------------------------------------------------------------
-store = MemoryStore()
+# MEMORY_BACKEND=sqlite (default, zero infrastructure) or weaviate (legacy)
+_backend = os.environ.get("MEMORY_BACKEND", "sqlite").lower()
+if _backend == "weaviate":
+    from memory_server.store import MemoryStore
+    store = MemoryStore()
+else:
+    from memory_server.sqlite_store import SQLiteMemoryStore
+    store = SQLiteMemoryStore()
 mcp = FastMCP("Memory Server", streamable_http_path="/")
 
 
