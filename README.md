@@ -16,21 +16,29 @@ A semantic memory layer for AI coding agents. It allows agents to store and retr
 
 ## Quick Start
 
-### 1. Start Weaviate
-
 ```bash
-docker compose up -d
-```
-
-### 2. Start the Server
-
-```bash
+pip install -r requirements.txt
 python -m memory_server
 ```
 
-The server runs at `http://localhost:8000`.
+That's it — no database to run. Memories live in a single SQLite file at
+`~/.memory_server/memories.db` (override with `MEMORY_DB_PATH`). The server
+runs at `http://localhost:8000`.
 
-### 3. Interactive Documentation
+<details>
+<summary>Legacy Weaviate backend</summary>
+
+The original Weaviate backend is still available:
+
+```bash
+pip install weaviate-client
+docker compose up -d
+MEMORY_BACKEND=weaviate python -m memory_server
+```
+
+</details>
+
+### Interactive Documentation
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) in your browser to test the API.
 
@@ -99,13 +107,15 @@ These can be called directly by any MCP-compatible agent.
 
 ## Environment Variables
 
-| Variable              | Description                              | Default     |
-|-----------------------|------------------------------------------|-------------|
-| `GROQ_API_KEY`        | Groq API key for free summarization      | *(required)* |
-| `ANTHROPIC_API_KEY`   | Anthropic API key (paid fallback only)   | *(optional)* |
-| `WEAVIATE_HOST`       | Weaviate hostname                        | `localhost`  |
-| `WEAVIATE_PORT`       | Weaviate HTTP port                       | `8080`       |
-| `WEAVIATE_GRPC_PORT`  | Weaviate gRPC port                       | `50051`      |
+| Variable              | Description                                      | Default     |
+|-----------------------|--------------------------------------------------|-------------|
+| `GROQ_API_KEY`        | Groq API key for free summarization              | *(required)* |
+| `ANTHROPIC_API_KEY`   | Anthropic API key (paid fallback only)           | *(optional)* |
+| `MEMORY_BACKEND`      | Storage backend: `sqlite` or `weaviate`          | `sqlite`     |
+| `MEMORY_DB_PATH`      | SQLite database file location                    | `~/.memory_server/memories.db` |
+| `WEAVIATE_HOST`       | Weaviate hostname (weaviate backend only)        | `localhost`  |
+| `WEAVIATE_PORT`       | Weaviate HTTP port (weaviate backend only)       | `8080`       |
+| `WEAVIATE_GRPC_PORT`  | Weaviate gRPC port (weaviate backend only)       | `50051`      |
 
 > **Billing note for `ANTHROPIC_API_KEY`:** Each deployer brings their own Anthropic key. The project does not supply or cover Anthropic API usage on anyone's behalf — whoever sets that env var is the one whose account gets billed if the Groq path fails and the Anthropic fallback fires.
 
@@ -113,12 +123,12 @@ Summarization follows a three-step fallback chain: Groq first (free), Anthropic 
 
 ## Architecture
 
-- **Vector Database**: Weaviate (local)
+- **Storage**: SQLite, single file, zero infrastructure (default) — brute-force cosine search over float32 blobs, sub-millisecond at this scale. Weaviate available as a legacy backend.
 - **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (ONNX backend), computed from raw text
 - **Summarization**: Groq (Llama 3.1 8B, primary) / Anthropic Claude (paid fallback), runs asynchronously after insert
 - **Framework**: FastAPI + FastMCP
 
-**Tunable constants** (hardcoded in `store.py`, not env vars):
+**Tunable constants** (hardcoded in `sqlite_store.py`/`store.py`, not env vars):
 
 | Constant                       | Default | Purpose |
 |-------------------------------|---------|---------|
@@ -132,8 +142,10 @@ mcp-memory-server/
 ├── memory_server/
 │   ├── __init__.py
 │   ├── main.py
-│   └── store.py
-├── docker-compose.yml
+│   ├── sqlite_store.py   # default backend (zero infra)
+│   ├── store.py          # legacy Weaviate backend
+│   └── summarize.py
+├── docker-compose.yml    # only needed for the Weaviate backend
 ├── requirements.txt
 ├── diagnose.py
 ├── test_e2e.py
